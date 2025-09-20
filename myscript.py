@@ -1,19 +1,18 @@
 import asyncio
 import os
+import json
 from pyppeteer import launch
 from pyppeteer.errors import TimeoutError
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 def format_number(number):
-    """Remove formatações e retorna apenas os dígitos"""
     number = ''.join(filter(str.isdigit, str(number)))
     if number.startswith('55'):
         number = number[2:]
     return number
 
 def try_with_nine(number):
-    """Tenta adicionar/remover o 9 para celulares"""
     if len(number) == 11 and number[2] == '9':
         return number[:2] + number[3:]
     elif len(number) == 10 and number[2] != '9':
@@ -98,15 +97,17 @@ async def check_contact_exists(page, number):
         return False, None
 
 async def main():
-    # Configuração Google Sheets
+    # Configuração Google Sheets via variável de ambiente
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_json, scope)
+    creds_dict = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON"))
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
-    sheet = client.open('LISTAS').worksheet('LISTA RG - BR TODO')
+
+    sheet_name = os.getenv("GOOGLE_SHEET_NAME", "LISTAS")
+    worksheet_name = os.getenv("GOOGLE_WORKSHEET_NAME", "LISTA RG - BR TODO")
+    sheet = client.open(sheet_name).worksheet(worksheet_name)
     numbers = sheet.col_values(1)[1:]
 
-    # Pyppeteer setup usando variáveis de ambiente
     headless = os.getenv("HEADLESS", "1") in ("1", "true", "yes")
     user_data_dir = os.getenv("USER_DATA_DIR", "./user_data")
     executable_path = os.getenv("PUPPETEER_EXECUTABLE_PATH", "/usr/bin/chromium")
@@ -123,19 +124,18 @@ async def main():
     await page.goto("https://web.whatsapp.com", {'waitUntil': 'networkidle2'})
     print("Aguardando login no WhatsApp Web...")
     await page.waitForSelector('button[aria-label="Nova conversa"]', timeout=180000)
-    print("Login concluído! Iniciando verificação...")
+    print("Login concluído!")
 
     results = []
     found_numbers = []
     batch_size = 5
 
-    # Preparar planilha de saída
     try:
-        target_sheet = client.open('LISTAS').worksheet('NUMEROS FORMATADOS BOT')
+        target_sheet = client.open(sheet_name).worksheet("NUMEROS FORMATADOS BOT")
         target_sheet.clear()
         target_sheet.update(values=[['NUMERO_LIMPO']], range_name='A1')
     except:
-        spreadsheet = client.open('LISTAS')
+        spreadsheet = client.open(sheet_name)
         target_sheet = spreadsheet.add_worksheet('NUMEROS FORMATADOS BOT', rows=1000, cols=10)
         target_sheet.update(values=[['NUMERO_LIMPO']], range_name='A1')
 
@@ -154,7 +154,6 @@ async def main():
         if found:
             clean_number = correct_number.replace('+', '').replace(' ', '').replace('-', '')
             found_numbers.append(clean_number)
-            # Salva em batch
             if len(found_numbers) % batch_size == 0:
                 start_row = len(found_numbers) - batch_size + 2
                 batch_data = [[num] for num in found_numbers[-batch_size:]]
@@ -163,6 +162,5 @@ async def main():
     await browser.close()
     return found_numbers
 
-# Função para API
 async def run_bot():
     return await main()
